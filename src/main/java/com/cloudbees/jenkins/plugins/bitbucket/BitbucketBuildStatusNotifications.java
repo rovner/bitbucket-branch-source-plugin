@@ -36,9 +36,6 @@ import hudson.model.listeners.SCMListener;
 import hudson.plugins.mercurial.MercurialSCMSource;
 import hudson.scm.SCM;
 import hudson.scm.SCMRevisionState;
-import java.io.File;
-import java.io.IOException;
-import javax.annotation.CheckForNull;
 import jenkins.model.JenkinsLocationConfiguration;
 import jenkins.plugins.git.AbstractGitSCMSource;
 import jenkins.scm.api.SCMHeadObserver;
@@ -46,6 +43,15 @@ import jenkins.scm.api.SCMRevision;
 import jenkins.scm.api.SCMRevisionAction;
 import jenkins.scm.api.SCMSource;
 import org.jenkinsci.plugins.displayurlapi.DisplayURLProvider;
+
+import javax.annotation.CheckForNull;
+import java.io.File;
+import java.io.IOException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
+import static java.util.concurrent.TimeUnit.SECONDS;
 
 /**
  * This class encapsulates all Bitbucket notifications logic.
@@ -88,7 +94,7 @@ public class BitbucketBuildStatusNotifications {
             status = new BitbucketBuildStatus(hash, "Something is wrong with the build of this commit", "FAILED", url,
                     key, name);
         } else {
-            status = new BitbucketBuildStatus(hash, "The tests have started...", "INPROGRESS", url, key, name);
+            status = new BitbucketBuildStatus(hash, "The build has been started...", "INPROGRESS", url, key, name);
         }
         new BitbucketChangesetCommentNotifier(bitbucket).buildStatus(status);
         if (result != null) {
@@ -96,30 +102,31 @@ public class BitbucketBuildStatusNotifications {
         }
     }
 
-    private static void sendNotifications(Run<?, ?> build, TaskListener listener)
+    private static boolean sendNotifications(Run<?, ?> build, TaskListener listener)
             throws IOException, InterruptedException {
         final SCMSource s = SCMSource.SourceByItem.findSource(build.getParent());
         if (!(s instanceof BitbucketSCMSource)) {
-            return;
+            return false;
         }
         BitbucketSCMSource source = (BitbucketSCMSource) s;
         if (new BitbucketSCMSourceContext(null, SCMHeadObserver.none())
                 .withTraits(source.getTraits())
                 .notificationsDisabled()) {
-            return;
+            return false;
         }
         SCMRevision r = SCMRevisionAction.getRevision(build);  // TODO JENKINS-44648 getRevision(s, build)
         String hash = getHash(r);
         if (hash == null) {
-            return;
+            return false;
         }
         if (r instanceof PullRequestSCMRevision) {
             listener.getLogger().println("[Bitbucket] Notifying pull request build result");
             createStatus(build, listener, source.buildBitbucketClient((PullRequestSCMHead) r.getHead()), hash);
-
+            return true;
         } else {
             listener.getLogger().println("[Bitbucket] Notifying commit build result");
             createStatus(build, listener, source.buildBitbucketClient(), hash);
+            return true;
         }
     }
 
@@ -159,6 +166,31 @@ public class BitbucketBuildStatusNotifications {
      */
     @Extension
     public static class JobCompletedListener extends RunListener<Run<?, ?>> {
+
+        @Override
+        public void onStarted(final Run<?, ?> build, final TaskListener listener) {
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+            executor.submit(new Runnable() {
+                @Override
+                public void run() {
+                    while(true) {
+                        try {
+                            Thread.sleep(1000);
+                        } catch (InterruptedException e) {
+                            throw new RuntimeException(e);
+                        }
+                        try {
+                            if (sendNotifications(build, listener)) {
+                                break;
+                            }
+                        } catch (IOException | InterruptedException e) {
+                            listener.getLogger().println("[Bitbucket] Error sending notification: " + e.getMessage());
+                        }
+                    }
+                }
+            });
+            executor.shutdown();
+        }
 
         @Override
         public void onCompleted(Run<?, ?> build, TaskListener listener) {

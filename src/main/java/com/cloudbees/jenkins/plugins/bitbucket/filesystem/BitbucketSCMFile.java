@@ -144,17 +144,17 @@ public class BitbucketSCMFile  extends SCMFile {
 	private String getRefForPullRequest() throws IOException, InterruptedException {
 		ChangeRequestCheckoutStrategy strategy = getCheckoutStrategy();
 		String prId = ref.replace("PR-", "");
-		String source = "";
-		if (strategy != null) {
-			if (strategy == ChangeRequestCheckoutStrategy.MERGE) {
-				source = "merge";
-			} else {
-				source = "from";
-			}
-		} else {
-			throw new UnsupportedOperationException(
-					"Can not get reference for this pull request since checkout strategy can not be determined");
-		}
+		String source = "merge";
+//		if (strategy != null) {
+//			if (strategy == ChangeRequestCheckoutStrategy.MERGE) {
+//				source = "merge";
+//			} else {
+//				source = "from";
+//			}
+//		} else {
+//			throw new UnsupportedOperationException(
+//					"Can not get reference for this pull request since checkout strategy can not be determined");
+//		}
 		return "refs/pull-requests/" + prId + "/" + source;
 	}
 
